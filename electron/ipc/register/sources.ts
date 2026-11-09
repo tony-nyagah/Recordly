@@ -14,7 +14,11 @@ import { selectedSource, setSelectedSource } from "../state";
 import type { SelectedSource, WindowBounds } from "../types";
 import { getScreen, parseWindowId } from "../utils";
 import { bringWindowsWindowForward, resolveWindowsWindowBounds } from "../windowsWindowControl";
-import { getScreenSourceIdForDisplay } from "./sourceMapping";
+import {
+	getScreenSourceIdForDisplay,
+	isLikelyLinuxWaylandSession,
+	LINUX_PORTAL_SCREEN_SOURCE_ID,
+} from "./sourceMapping";
 
 const execFileAsync = promisify(execFile);
 const SOURCE_LIST_CACHE_TTL_MS = 1200;
@@ -577,7 +581,36 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
 		}
 	});
 
-	ipcMain.handle("get-selected-source", () => {
+	ipcMain.handle("get-selected-source", async () => {
+		// On Linux/X11 there is no portal, so the "screen:linux-portal" sentinel
+		// (or no selection) ends up as the hardcoded "screen:0:0" id, which does
+		// not exist under X11 and fails with "Could not start video source".
+		// Resolve it to the first real screen instead. getSources() has no portal
+		// side effects on X11.
+		if (
+			process.platform === "linux" &&
+			!isLikelyLinuxWaylandSession(process.env) &&
+			(!selectedSource?.id || selectedSource.id === LINUX_PORTAL_SCREEN_SOURCE_ID)
+		) {
+			try {
+				const screens = await desktopCapturer.getSources({
+					types: ["screen"],
+					thumbnailSize: { width: 1, height: 1 },
+				});
+				const screen = screens[0];
+				if (screen) {
+					setSelectedSource({
+						id: screen.id,
+						name: screen.name,
+						display_id: screen.display_id,
+						sourceType: "screen",
+					});
+					broadcastSelectedSourceChange();
+				}
+			} catch (error) {
+				console.warn("Failed to resolve default X11 screen source:", error);
+			}
+		}
 		return selectedSource;
 	});
 

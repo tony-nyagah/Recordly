@@ -25,6 +25,7 @@ import {
 	killWindowsCaptureProcess,
 	registerIpcHandlers,
 } from "./ipc/handlers";
+import { isLikelyLinuxWaylandSession } from "./ipc/register/sourceMapping";
 import { ensureMediaServer } from "./mediaServer";
 import { hardenWebContentsNavigation, shouldHardenWebContentsType } from "./navigationPolicy";
 import { shouldGrantDisplayCapture, shouldGrantMediaPermission } from "./permissionPolicy";
@@ -1100,16 +1101,21 @@ app.whenReady().then(async () => {
 			// pre-selected (e.g. fresh session where the renderer skipped the
 			// source picker entirely). This avoids calling getSources() which
 			// would itself trigger an extra portal dialog.
+			// Only Wayland resolves this synthetic id through the portal. On X11
+			// "screen:0:0" is not a real source, so fall through to a real screen.
+			const wantsDefaultScreen = !sourceId || sourceId === "screen:linux-portal";
 			const isLinuxPortalSentinel =
-				process.platform === "linux" && (sourceId === "screen:linux-portal" || !sourceId);
+				process.platform === "linux" &&
+				wantsDefaultScreen &&
+				isLikelyLinuxWaylandSession(process.env);
 			if (isLinuxPortalSentinel) {
 				callback({ video: { id: "screen:0:0", name: "Entire screen" } });
 				return;
 			}
 			const sources = await desktopCapturer.getSources({ types: ["screen", "window"] });
-			const source = sourceId
-				? (sources.find((s) => s.id === sourceId) ?? sources[0])
-				: sources[0];
+			const source = wantsDefaultScreen
+				? (sources.find((s) => s.id.startsWith("screen:")) ?? sources[0])
+				: (sources.find((s) => s.id === sourceId) ?? sources[0]);
 			if (source) {
 				callback({
 					video: { id: source.id, name: source.name },
